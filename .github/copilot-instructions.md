@@ -179,6 +179,7 @@ python -m livetools resume                   # unfreeze target
 **Patch + Scan (anytime):**
 ```
 python -m livetools mem write <addr> <hex>   # write bytes to live memory
+python -m livetools mem alloc <size>         # allocate RWX memory in target, returns address
 python -m livetools scan <pattern> --range START:SIZE
 ```
 
@@ -194,15 +195,71 @@ python -m livetools analyze <file.jsonl> [--summary] [--group-by FIELD] [--filte
 **D3D9 / Memory helpers:**
 ```
 python -m livetools dipcnt on/off/read       # D3D9 DrawIndexedPrimitive call counter
+python -m livetools dipcnt on $DEV_PTR       # start DIP counter with device pointer address
 python -m livetools dipcnt callers [N]       # sample N DIP calls and histogram return addresses
 python -m livetools memwatch start/stop/read # memory write watchpoint with backtrace
+python -m livetools vishook on $JMP $ORIG    # patch jmp trampoline to force visibility
+python -m livetools vishook off              # restore original jmp
+python -m livetools vishook stats            # show override/passthrough counts
 ```
 
 **NOTE**: Some processes require their window to be focused for traces to capture data.
 
+### Game Window Automation (`livetools/gamectl.py`) -- no Frida needed
+
+Sends keystrokes and mouse clicks to a game window via Windows **SendInput**. Works standalone — no `attach` session required. All key bindings and sequences are CLI arguments; nothing is hardcoded.
+
+**Why SendInput, not PostMessage/SendMessage**: DirectInput and RawInput games (most DX9-era titles) read raw device state — they ignore `WM_KEYDOWN` posted to the window entirely. `SendInput` injects into the global input stream, which these games do see. The game window must be in the foreground first; `gamectl` handles this automatically via `AttachThreadInput` + `SetForegroundWindow` to bypass the Windows foreground lock.
+
+**Window lookup** — use `--exe` (preferred, matches by process name) or `--window` (title substring fallback):
+
+```
+python -m livetools gamectl --exe <game.exe> info
+python -m livetools gamectl --exe <game.exe> key <KEY>
+python -m livetools gamectl --exe <game.exe> keys "<SEQUENCE>" [--delay-ms N]
+python -m livetools gamectl --exe <game.exe> click <X> <Y>
+python -m livetools gamectl --exe <game.exe> macro --macro-file patches/<project>/macros.json <NAME>
+python -m livetools gamectl --exe <game.exe> macros --macro-file patches/<project>/macros.json
+```
+
+Key names: `RETURN`, `ESCAPE`, `SPACE`, `UP`, `DOWN`, `LEFT`, `RIGHT`, `TAB`, `F1`–`F12`, `A`–`Z`, `0`–`9`, `NUMPAD0`–`9`, `SHIFT`, `CTRL`, `ALT`.
+
+Sequence token syntax (used in `keys` and macro `steps`):
+- `KEY_NAME` — keydown + keyup
+- `WAIT:N` — pause N milliseconds
+- `HOLD:KEY_NAME:N` — hold key N ms before keyup
+
+Macro file (`macros.json`) — one file per project, stored in `patches/<project>/macros.json`:
+```json
+{
+  "navigate_menu": {
+    "description": "Navigate from title screen into a scene",
+    "steps": "RETURN WAIT:1000 DOWN DOWN RETURN WAIT:500 RETURN"
+  },
+  "pause": {
+    "description": "Open pause menu",
+    "steps": "ESCAPE"
+  }
+}
+```
+
+### Bundled Radare2 (`tools/radare2-6.1.0-w64/`)
+
+Radare2 6.1.0 is bundled at `tools/radare2-6.1.0-w64/bin/`. The `retools` scripts use it internally via r2pipe — you generally don't invoke it directly. Key executables if needed:
+
+| Binary | Purpose |
+|--------|---------|
+| `radare2.exe` | Interactive RE session (`r2 binary.exe`) |
+| `rabin2.exe` | Binary info: imports, exports, sections, strings (`rabin2 -i binary.exe`) |
+| `rasm2.exe` | Assemble/disassemble single instructions (`rasm2 -a x86 -b 32 "nop"`) |
+| `rafind2.exe` | Search for byte patterns in files |
+| `rahash2.exe` | Hash files or byte ranges |
+| `radiff2.exe` | Binary diff between two files |
+| `rax2.exe` | Number base converter (`rax2 0x401000`) |
+
 ### D3D9 Frame Trace (`graphics/directx/dx9/tracer/`) -- full-frame API capture and analysis
 
-A proxy DLL that intercepts all 119 `IDirect3DDevice9` methods, capturing every call with arguments, backtraces, pointer-followed data (matrices, constants, shader bytecodes), and in-process shader disassembly (via the game's own d3dx9 DLL). Outputs JSONL for offline analysis. Like `apitrace` but with RE-focused analysis built in.
+A proxy DLL that intercepts all 119 `IDirect3DDevice9` methods, capturing every call with arguments, backtraces, pointer-followed data (matrices, constants, shader bytecodes), and in-process shader disassembly. Outputs JSONL for offline analysis. Like `apitrace` but with RE-focused analysis built in.
 
 **Architecture**: Python codegen (`d3d9_methods.py`) → C proxy DLL (`src/`) → JSONL → Python analyzer (`analyze.py`). The proxy chains to the real d3d9 (or another wrapper) and adds near-zero overhead when not capturing.
 
@@ -215,7 +272,7 @@ cd graphics/directx/dx9/tracer/src && build.bat                              # b
 python -m graphics.directx.dx9.tracer trigger --game-dir <GAME_DIR>     # trigger capture (3s countdown)
 ```
 
-**proxy.ini** settings: `CaptureFrames=N` (frames to record), `CaptureInit=1` (capture boot-time calls), `Chain.DLL=<wrapper.dll>` (chain to another d3d9 wrapper, or leave empty for system d3d9).
+**proxy.ini** settings: `CaptureFrames=N` (frames to record), `CaptureInit=1` (capture boot-time calls like shader creation), `Chain.DLL=<wrapper.dll>` (chain to another d3d9 wrapper, or leave empty for system d3d9).
 
 **IMPORTANT**: `--game-dir` must point to the directory containing the deployed proxy DLL (where the game runs). The trigger file must be created there.
 
@@ -238,7 +295,7 @@ All analysis: `python -m graphics.directx.dx9.tracer analyze <JSONL> [OPTIONS]`
 | `--const-provenance-draw N` | Detailed: all register values and sources for draw #N |
 | `--classify-draws` | Auto-tag draws (alpha, ztest, fog, fullscreen-quad, etc.) with draw method (DIP/DP/DPUP/DIPUP) and vertex shader breakdown |
 | `--vtx-formats` | Group draws by vertex declaration with element breakdown |
-| `--redundant` | Find redundant state-set calls |
+| `--redundant` | Find redundant state-set calls (same value set twice before a draw) |
 | `--texture-freq` | Texture binding frequency across all draws |
 | `--rt-graph` | Render target dependency graph (mermaid) |
 | `--diff-draws A B` | State diff between two draw calls |
@@ -257,7 +314,7 @@ All analysis: `python -m graphics.directx.dx9.tracer analyze <JSONL> [OPTIONS]`
 - **Every D3D9 call**: method name, slot, arguments (pointers as hex, integers as decimal), return value
 - **Full backtraces**: `CaptureStackBackTrace` with all frames, resolvable via `--resolve-addrs`
 - **Shader bytecodes + disassembly**: captured at `CreateVertexShader`/`CreatePixelShader` time, disassembled in-process via D3DXDisassembleShader. Includes CTAB with **named parameters** (e.g. `WorldViewProj`, `FogValue`), register mappings, and full instruction listing
-- **Created object handles**: output pointers captured post-call, enabling handle→bytecode linking
+- **Created object handles**: `CreateVertexDeclaration`/`CreateVertexShader`/`CreatePixelShader` output pointers captured post-call, enabling handle→bytecode linking
 - **Constant values**: float/int constant registers from `SetVertexShaderConstantF`/`SetPixelShaderConstantF`
 - **Matrices**: 4x4 float matrices from `SetTransform`/`MultiplyTransform`
 - **Vertex declarations**: full `D3DVERTEXELEMENT9` arrays with type/usage/stream decoded
@@ -266,9 +323,9 @@ All analysis: `python -m graphics.directx.dx9.tracer analyze <JSONL> [OPTIONS]`
 
 | Path | Role |
 |------|------|
-| `graphics/directx/dx9/tracer/cli.py` | CLI entry point (codegen, trigger, analyze) |
+| `graphics/directx/dx9/tracer/cli.py` | CLI entry point (codegen, trigger, analyze subcommands) |
 | `graphics/directx/dx9/tracer/analyze.py` | Analysis engine (all `--*` options) |
-| `graphics/directx/dx9/tracer/d3d9_methods.py` | Single source of truth: method signatures, D3D9 enum constants, slot definitions, codegen |
+| `graphics/directx/dx9/tracer/d3d9_methods.py` | Single source of truth: 119 method signatures, D3D9 enum constants, slot definitions, codegen |
 | `graphics/directx/dx9/tracer/src/` | C proxy DLL source (edit and rebuild for advanced use cases) |
 | `graphics/directx/dx9/tracer/bin/` | Pre-built d3d9.dll + proxy.ini (deploy directly) |
 
@@ -359,7 +416,7 @@ Field path syntax: dot-separated with array indices. `addr`, `leave.eax`, `enter
 ### Decision Guide
 
 - "What does this function do?" → `decompiler.py` (best), then `disasm.py` + `cfg.py`
-- "Decompile with named structs and functions" → `decompiler.py --types`
+- "Decompile with named structs and functions" → `decompiler.py --types` (inline, stdin from `structrefs.py --aggregate`, or knowledge base file)
 - "Who calls this function?" → `xrefs.py` (flat) or `callgraph.py --up` (tree)
 - "What does this function call?" → `funcinfo.py` (list) or `callgraph.py --down` (tree)
 - "Where is this global read/written?" → `datarefs.py`
@@ -367,8 +424,8 @@ Field path syntax: dot-separated with array indices. `addr`, `leave.eax`, `enter
 - "Find a string and who uses it" → `search.py strings --xrefs`
 - "Where is struct field +0x54 used?" → `structrefs.py`
 - "What does this struct look like?" → `structrefs.py --aggregate`
-- "What C++ class is this vtable?" → `rtti.py vtable`
-- "What type was a caught/thrown exception?" → `rtti.py throwinfo`
+- "What C++ class is this vtable?" → `rtti.py vtable` (see RTTI notes below)
+- "What type was a caught/thrown exception?" → `rtti.py throwinfo` (see RTTI notes below)
 - "What DLL functions are exported?" → `search.py exports`
 - "Find all instructions using a specific constant" → `search.py insn`
 - "Find a mov-immediate near a struct field access" → `search.py insn --near`
@@ -386,6 +443,9 @@ Field path syntax: dot-separated with array indices. `addr`, `leave.eax`, `enter
 - "What are the actual register values?" → `livetools trace --read` or `bp` + `regs`
 - "How many draw calls happen?" → `livetools dipcnt`
 - "Who writes to this memory address?" → `livetools memwatch`
+- "Force visibility for callers above a threshold address" → `livetools vishook on`
+- "Allocate executable memory in the target process" → `livetools mem alloc`
+- "Send keystrokes or navigate game menus automatically" → `livetools gamectl keys` or `gamectl macro`
 - **"What does the game's full render frame look like?"** → `dx9tracer analyze --summary` + `--render-passes` + `--pipeline-diagram`
 - "What shaders does the game use and what constants do they need?" → `dx9tracer analyze --shader-map`
 - "Which code set a specific shader constant at draw time?" → `dx9tracer analyze --const-provenance` or `--const-provenance-draw N`
@@ -403,12 +463,20 @@ Field path syntax: dot-separated with array indices. `addr`, `leave.eax`, `enter
 
 #### `rtti.py` -- MSVC RTTI only
 
-Works exclusively with MSVC-compiled binaries that have RTTI enabled (`/GR`). Will not work with GCC/Clang/MinGW binaries, `/GR-` builds, or partially stripped binaries.
+Works exclusively with **MSVC-compiled** binaries that have RTTI enabled (`/GR`, the default). Will not work with:
+- GCC/Clang/MinGW binaries (different ABI)
+- Binaries compiled with `/GR-` (RTTI disabled)
+- Partially stripped binaries where `.rdata` RTTI structures were removed
 
-How to get a vtable address:
+**How to get a vtable address to pass to `rtti.py vtable`:**
 1. From `vtable.py dump $VA` -- if you already know a vtable location
-2. From `datarefs.py` / `structrefs.py` -- field at offset `+0x00` of a C++ object is the vtable pointer
+2. From `datarefs.py` / `structrefs.py` -- field at offset `+0x00` of a C++ object is typically the vtable pointer
 3. From live debugging -- `livetools mem read` on an object; the first pointer-sized value is the vtable
+
+**If `rtti.py vtable` fails**, the error message tells you exactly why (bad signature, null pointers, corrupt name). Common causes:
+- The address is not actually a vtable (try nearby aligned addresses)
+- The binary has no RTTI at this vtable (abstract base, COM interface, etc.)
+- The vtable belongs to a non-MSVC component
 
 `throwinfo` input differs by bitness:
 - 64-bit: pass the RVA from the exception record (minidump param[2] minus param[3])
@@ -437,19 +505,32 @@ Minidumps vary in how much data they capture depending on `MiniDumpWriteDump` fl
 
 #### `funcinfo.py` -- call-target heuristic
 
-`find_start()` misses functions only reachable via indirect calls (vtable dispatch, callbacks, function pointers). If it returns a clearly wrong function start, use `disasm.py` and look for padding/prologues manually.
+`find_start()` locates function boundaries by building a table of all `CALL`/`JMP` targets in the binary. This misses functions only reachable via indirect calls (vtable dispatch, callbacks, function pointers). If `funcinfo.py` returns a clearly wrong function start (e.g., huge function spanning unrelated code), the target address may be in a function that has no direct callers. Use `disasm.py` and look for padding/prologues manually in that case.
 
 #### `datarefs.py` / `search.py strings --xrefs` -- addressing modes
 
-Finds references via: absolute memory operands, immediate values (with `--imm`), and RIP-relative addressing. If a reference isn't found, the address may be computed at runtime -- try `search.py pattern` with the address bytes, or use `livetools memwatch`.
+These tools find references via three mechanisms:
+- Absolute memory operands: `mov eax, [0x7A0000]` (x86 direct addressing)
+- Immediate values: `push 0x7A0000`, `mov ecx, 0x7A0000` (with `--imm` flag)
+- RIP-relative: `lea rdx, [rip + 0x1234]` (x64 position-independent addressing)
+
+If you suspect a reference exists but the tool doesn't find it, the address might be computed at runtime (e.g., base + offset in a register), loaded from a table, or assembled across multiple instructions. In those cases, try `search.py pattern` with the address bytes directly, or use `livetools memwatch` to catch runtime access.
 
 ### Project Workspace
 
-Use `patches/<project_name>/` for all project-specific artifacts (gitignored). Create whatever you need: knowledge base files (`kb.h`), one-off scripts, ASI patch specs, notes, trace data. Create the project subfolder on first use.
+Use `patches/<project_name>/` (git-ignored) for all project-specific artifacts. This folder is fair game -- create whatever you need:
+- Knowledge base files (`kb.h`)
+- One-off analysis scripts
+- ASI patch specs and builds
+- Notes, logs, collected trace data
+- Anything ephemeral or project-specific
+
+The `patches/` folder is in `.gitignore` so nothing leaks into the repo. Create the project subfolder on first use.
 
 ### Knowledge Base
 
-Maintain a knowledge base file (`.h`) at `patches/<project>/kb.h` that accumulates discoveries.
+When reverse engineering a binary, maintain a knowledge base file (`.h`) that accumulates discoveries.
+Store the KB in the project workspace: `patches/<project>/kb.h`
 
 **Format:**
 ```c
@@ -468,11 +549,11 @@ $ 0x7C554C Flags g_renderFlags
 ```
 
 **When to update the KB:**
-- Identified a function's purpose → add `@ 0xADDR` with name and signature
-- Reconstructed a struct (e.g. from `structrefs.py --aggregate`) → add struct definition
-- Identified a global via `datarefs.py` → add `$ 0xADDR` with name and type
-- Identified magic constants → define an enum with named values
-- `rtti.py` reveals a class name → use it in struct/function names
+- When you identify a function's purpose, add `@ 0xADDR` with a descriptive name and signature
+- When you reconstruct a struct (e.g., from `structrefs.py --aggregate`), add the struct definition
+- When you identify a global variable via `datarefs.py`, add `$ 0xADDR` with its name and type
+- When you identify magic constants, define an enum with named values
+- When `rtti.py` reveals a class name, use it in struct/function names
 
 **Always pass `--types <kb_file>` when using `decompiler.py`** so accumulated knowledge improves every decompilation.
 
@@ -619,7 +700,7 @@ The goal is to answer three questions. The tools and approaches below are illust
 **Recommended first step**: Deploy the D3D9 tracer proxy (`graphics/directx/dx9/tracer/bin/`) to the application directory, capture 2 frames, then run `--shader-map` and `--const-provenance`. The shader disassembly includes CTAB headers with **named parameters** (e.g. `WorldViewProj c0 4`, `WorldView c4 3`, `FogValue c8 1`) which directly answer question #1 without any manual RE. Follow up with `--vtx-formats` for question #2 and `--render-passes` + `--pipeline-diagram` for question #3.
 
 **1. Which VS constant registers hold View, Projection, and World matrices?**
-- **Best**: `dx9tracer analyze --shader-map` — CTAB names map registers to their purpose directly
+- **Best**: `dx9tracer analyze --shader-map` — CTAB names map registers to their purpose directly (e.g. `WorldViewProj c0 4`, `BlendMatrices c0 64`)
 - **Verification**: `dx9tracer analyze --const-provenance-draw N` — see actual matrix values and which seq# set them
 - Script output gives candidate call sites; `decompiler.py` on those sites can reveal register ranges and data sources
 - If scripts miss call sites, `xrefs.py` on the `SetVertexShaderConstantF` IAT slot finds the rest
@@ -627,13 +708,13 @@ The goal is to answer three questions. The tools and approaches below are illust
 - If the game uses an indirection layer, `callgraph.py --up` from the call site can expose the real dispatch path
 
 **2. What vertex formats are used, and is there skinning?**
-- **Best**: `dx9tracer analyze --vtx-formats` — groups draws by vertex declaration with full element breakdown
+- **Best**: `dx9tracer analyze --vtx-formats` — groups draws by vertex declaration with full element breakdown (POSITION, NORMAL, BLENDWEIGHT, etc.)
 - Script output surfaces vertex declaration addresses; `decompiler.py` on the setup code can confirm the format
 - `search.py insn` for `D3DDECL_END` patterns or FVF constants can find inline declarations the scripts miss
 - `structrefs.py --aggregate` on a draw call wrapper can show what the vertex buffer layout looks like in practice
 
 **3. Is the render path too complex for a simple register remap?**
-- **Best**: `dx9tracer analyze --render-passes` + `--pipeline-diagram` — shows render target groups, pass types, and a mermaid flowchart
+- **Best**: `dx9tracer analyze --render-passes` + `--pipeline-diagram` — shows render target groups, pass types, and a mermaid flowchart of the pipeline
 - `dx9tracer analyze --classify-draws` — auto-tags draws by render state, draw method (DIP/DP), and vertex shader
 - `callgraph.py --down` from the render entry point can reveal depth — wide or deeply conditional trees warrant more investigation before touching defines
 - `livetools steptrace` through a draw call can map the exact execution path per frame

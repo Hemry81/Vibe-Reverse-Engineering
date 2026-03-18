@@ -216,7 +216,7 @@ python -m livetools trace <SetVSConstF_call_addr> --count 50 \
 ### Count draw calls and find callers
 ```bash
 python -m livetools dipcnt on
-# wait in-game
+# wait for the game to be running with geometry visible
 python -m livetools dipcnt read
 python -m livetools dipcnt callers 100
 ```

@@ -15,7 +15,7 @@ Examples:
     python -m graphics.directx.dx9.tracer codegen -o src/d3d9_trace_hooks.inc
 
     # Trigger a 2-frame capture with 5s delay
-    python -m graphics.directx.dx9.tracer trigger --game-dir "C:/Games/MyGame" --delay 5
+    python -m graphics.directx.dx9.tracer trigger --game-dir "C:/Games/SomeGame" --delay 5
 
     # Analyze the captured trace
     python -m graphics.directx.dx9.tracer analyze dxtrace_frame.jsonl --summary

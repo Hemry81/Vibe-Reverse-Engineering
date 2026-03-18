@@ -35,7 +35,7 @@ pip install -r requirements.txt
 ```bash
 python -m livetools gamectl --exe game.exe info
 python -m livetools gamectl --exe game.exe keys "DOWN DOWN RETURN"
-python -m livetools gamectl --exe game.exe macro --macro-file patches/MyGame/macros.json navigate_menu
+python -m livetools gamectl --exe game.exe macro --macro-file patches/MyProject/macros.json navigate_menu
 ```
 
 **D3D9 frame tracer** (`graphics/directx/dx9/tracer/`) captures every `IDirect3DDevice9` call with arguments, backtraces, shader bytecodes, and matrix data. Outputs JSONL for offline analysis.
@@ -59,7 +59,7 @@ Each teaches the agent the full tool catalog — which tool to reach for, when, 
 
 Open this directory in your agentic coding tool and describe what you're after:
 
-> Disable frustum culling in "D:/Games/MyGame/AwesomeGame.exe" -- I'm modding raytracing and need geometry to render behind the camera for reflections/mirrors.
+> Disable frustum culling in "D:/Games/SomeGame/game.exe" -- I'm modding raytracing and need geometry to render behind the camera for reflections/mirrors.
 
 Be descriptive about the feature or bug, the expected behavior, and your goal. The agent will plan and execute from there.
 

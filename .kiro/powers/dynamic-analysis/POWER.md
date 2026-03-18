@@ -58,6 +58,7 @@ python -m livetools resume                    # unfreeze target
 ### Patch + Scan (anytime)
 ```
 python -m livetools mem write <addr> <hex>    # write bytes to live memory
+python -m livetools mem alloc <size>          # allocate RWX memory in target, returns address
 python -m livetools scan <pattern> --range START:SIZE
 ```
 
@@ -68,6 +69,17 @@ python -m livetools steptrace <addr> [--max-insn N] [--call-depth D] [--detail L
 python -m livetools collect <addr> [addr2 ...] [--duration N] [--read SPEC] [--fence ADDR] [--label ADDR=NAME] [--output FILE]
 python -m livetools modules [--filter PATTERN]
 python -m livetools analyze <file.jsonl> [--summary] [--group-by FIELD] [--filter EXPR] [--cross-tab F1 F2] [--histogram FIELD] [--export-csv FILE]
+```
+
+### D3D9 / Memory Helpers
+```
+python -m livetools dipcnt on/off/read       # D3D9 DrawIndexedPrimitive call counter
+python -m livetools dipcnt on $DEV_PTR       # start DIP counter with device pointer address
+python -m livetools dipcnt callers [N]       # sample N DIP calls and histogram return addresses
+python -m livetools memwatch start/stop/read # memory write watchpoint with backtrace
+python -m livetools vishook on $JMP $ORIG    # patch jmp trampoline to force visibility
+python -m livetools vishook off              # restore original jmp
+python -m livetools vishook stats            # show override/passthrough counts
 ```
 
 ---

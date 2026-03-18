@@ -31,7 +31,7 @@ Usage (library):
 Macro file format (JSON) — store at patches/<GameName>/macros.json:
     {
       "navigate_menu": {
-        "description": "Navigate from title screen into a race",
+        "description": "Navigate from title screen into a scene",
         "steps": "RETURN WAIT:1000 DOWN DOWN RETURN WAIT:500 RETURN"
       }
     }
